@@ -1507,7 +1507,21 @@ bool Heap::CollectGarbage(AllocationSpace space,
                           GarbageCollectionReason gc_reason,
                           const v8::GCCallbackFlags gc_callback_flags) {
   const char* collector_reason = nullptr;
-  GarbageCollector collector = SelectGarbageCollector(space, &collector_reason);
+  bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
+  size_t before_memory = GlobalSizeOfObjects();
+  auto before_time = clock();
+  bool result = CollectGarbageAux(space, gc_reason, gc_callback_flags);
+  auto after_time = clock();
+  size_t after_memory = GlobalSizeOfObjects();
+  gc_history_.records.push_back({before_memory, after_memory, before_time, after_time, major});
+  return result;
+}
+
+bool Heap::CollectGarbageAux(AllocationSpace space,
+                             GarbageCollectionReason gc_reason,
+                             const v8::GCCallbackFlags gc_callback_flags) {
+    const char* collector_reason = nullptr;
+    GarbageCollector collector = SelectGarbageCollector(space, &collector_reason);
   is_current_gc_forced_ = gc_callback_flags & v8::kGCCallbackFlagForced ||
                           current_gc_flags_ & kForcedGC;
 

@@ -253,6 +253,7 @@ class Heap {
   // Stores ephemeron entries where the EphemeronHashTable is in old-space,
   // and the key of the entry is in new-space. Such keys do not appear in the
   // usual OLD_TO_NEW remembered set.
+  GCHistory gc_history_;
   EphemeronRememberedSet ephemeron_remembered_set_;
   enum FindMementoMode { kForRuntime, kForGC };
 
@@ -951,6 +952,10 @@ class Heap {
   V8_EXPORT_PRIVATE bool CollectGarbage(
       AllocationSpace space, GarbageCollectionReason gc_reason,
       const GCCallbackFlags gc_callback_flags = kNoGCCallbackFlags);
+
+  V8_EXPORT_PRIVATE bool CollectGarbageAux(
+      AllocationSpace space, GarbageCollectionReason gc_reason,
+      const GCCallbackFlags gc_callback_flags);
 
   // Performs a full garbage collection.
   V8_EXPORT_PRIVATE void CollectAllGarbage(
