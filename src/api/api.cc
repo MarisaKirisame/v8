@@ -8750,6 +8750,18 @@ i::Address* Isolate::GetDataFromSnapshotOnce(size_t index) {
   return GetSerializedDataFromFixedArray(i_isolate, list, index);
 }
 
+GCHistory Isolate::GetGCHistory() {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  i::Heap* heap = isolate->heap();
+  return heap->gc_history_;
+}
+
+void Isolate::SetMaxPhysicalMemoryOfDevice(size_t max_physical_memory) {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  i::Heap* heap = isolate->heap();
+  heap->max_physical_memory_ = max_physical_memory;
+}
+
 void Isolate::GetHeapStatistics(HeapStatistics* heap_statistics) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
   i::Heap* heap = isolate->heap();

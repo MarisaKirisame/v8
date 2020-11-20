@@ -1526,7 +1526,21 @@ bool Heap::CollectGarbage(AllocationSpace space,
                           GarbageCollectionReason gc_reason,
                           const v8::GCCallbackFlags gc_callback_flags) {
   const char* collector_reason = nullptr;
-  GarbageCollector collector = SelectGarbageCollector(space, &collector_reason);
+  bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
+  size_t before_memory = GlobalSizeOfObjects();
+  auto before_time = clock();
+  bool result = CollectGarbageAux(space, gc_reason, gc_callback_flags);
+  auto after_time = clock();
+  size_t after_memory = GlobalSizeOfObjects();
+  gc_history_.records.push_back({before_memory, after_memory, before_time, after_time, major});
+  return result;
+}
+
+bool Heap::CollectGarbageAux(AllocationSpace space,
+                             GarbageCollectionReason gc_reason,
+                             const v8::GCCallbackFlags gc_callback_flags) {
+    const char* collector_reason = nullptr;
+    GarbageCollector collector = SelectGarbageCollector(space, &collector_reason);
   is_current_gc_forced_ = gc_callback_flags & v8::kGCCallbackFlagForced ||
                           current_gc_flags_ & kForcedGC ||
                           force_gc_on_next_allocation_;
@@ -4884,6 +4898,10 @@ bool Heap::ShouldOptimizeForLoadTime() {
              isolate()->LoadStartTimeMs() + kMaxLoadTimeMs;
 }
 
+bool Heap::OverPhysicalMemory(size_t size) {
+  return (max_physical_memory_ != 0) && (base::SysInfo::AmountOfPhysicalMemoryUsed() + size > max_physical_memory_);
+}
+
 // This predicate is called when an old generation space cannot allocated from
 // the free list and is about to add a new page. Returning false will cause a
 // major GC. It happens when the old generation allocation limit is reached and
@@ -4892,6 +4910,9 @@ bool Heap::ShouldOptimizeForLoadTime() {
 bool Heap::ShouldExpandOldGenerationOnSlowAllocation(LocalHeap* local_heap) {
   if (always_allocate() || OldGenerationSpaceAvailable() > 0) return true;
   // We reached the old generation allocation limit.
+
+  size_t page_size = 0;
+  if (OverPhysicalMemory(page_size)) return false;
 
   // Background threads need to be allowed to allocate without GC after teardown
   // was initiated.

@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 
 #include <atomic>
 #include <memory>
@@ -8326,6 +8327,17 @@ class V8_EXPORT MeasureMemoryDelegate {
       Local<Promise::Resolver> promise_resolver, MeasureMemoryMode mode);
 };
 
+struct GCRecord {
+  size_t before_memory, after_memory;
+  clock_t before_time, after_time;
+  bool is_major_gc;
+};
+
+struct GCHistory {
+  std::vector<GCRecord> records;
+  clock_t heap_birth_time = clock();
+};
+
 /**
  * Isolate represents an isolated instance of the V8 engine.  V8 isolates have
  * completely separate states.  Objects from one isolate must not be used in
@@ -8856,6 +8868,9 @@ class V8_EXPORT Isolate {
    */
   void GetHeapStatistics(HeapStatistics* heap_statistics);
 
+  void SetMaxPhysicalMemoryOfDevice(size_t max_physical_memory);
+
+ GCHistory GetGCHistory();
   /**
    * Returns the number of spaces in the heap.
    */

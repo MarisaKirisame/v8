@@ -20,6 +20,7 @@
 #include "src/base/atomic-utils.h"
 #include "src/base/enum-set.h"
 #include "src/base/platform/condition-variable.h"
+#include "src/base/sys-info.h"
 #include "src/builtins/accessors.h"
 #include "src/common/assert-scope.h"
 #include "src/common/globals.h"
@@ -256,6 +257,7 @@ class Heap {
   // Stores ephemeron entries where the EphemeronHashTable is in old-space,
   // and the key of the entry is in new-space. Such keys do not appear in the
   // usual OLD_TO_NEW remembered set.
+  GCHistory gc_history_;
   EphemeronRememberedSet ephemeron_remembered_set_;
   enum FindMementoMode { kForRuntime, kForGC };
 
@@ -957,6 +959,10 @@ class Heap {
   V8_EXPORT_PRIVATE bool CollectGarbage(
       AllocationSpace space, GarbageCollectionReason gc_reason,
       const GCCallbackFlags gc_callback_flags = kNoGCCallbackFlags);
+
+  V8_EXPORT_PRIVATE bool CollectGarbageAux(
+      AllocationSpace space, GarbageCollectionReason gc_reason,
+      const GCCallbackFlags gc_callback_flags);
 
   // Performs a full garbage collection.
   V8_EXPORT_PRIVATE void CollectAllGarbage(
@@ -2092,6 +2098,13 @@ class Heap {
 
   // ... and since the last scavenge.
   size_t survived_last_scavenge_ = 0;
+
+  // will not allocate when total amount of physical memory being used is above this number.
+  // if it is 0 this restriction is off.
+public:
+  size_t max_physical_memory_ = 0;
+private:
+  bool OverPhysicalMemory(size_t size);
 
   // This is not the depth of nested AlwaysAllocateScope's but rather a single
   // count, as scopes can be acquired from multiple tasks (read: threads).

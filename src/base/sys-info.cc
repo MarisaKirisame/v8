@@ -6,6 +6,7 @@
 
 #if V8_OS_POSIX
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -52,6 +53,37 @@ int SysInfo::NumberOfProcessors() {
 #endif
 }
 
+#include<stdio.h>
+
+int64_t SysInfo::AmountOfPhysicalMemoryUsed() {
+#ifdef V8_OS_POSIX
+  FILE *meminfo = fopen("/proc/meminfo", "r");
+  if(meminfo == NULL) {
+    return 0;
+  }
+  char line[256];
+  int totalram;
+  int availableram;
+  bool totalramget = false;
+  bool availableramget = false;
+  while(fgets(line, sizeof(line), meminfo)) {
+    if(totalramget || sscanf(line, "MemTotal: %d kB", &totalram) == 1) {
+      totalramget = true;
+    }
+    if(availableramget || sscanf(line, "MemAvailable: %d kB", &availableram) == 1) {
+      availableramget = true;
+    }
+    if (totalramget && availableramget) {
+      fclose(meminfo);
+      return (totalram - availableram) * 1024; // It is always in 1024 and not 1000 or MB or GB. I checked.
+    }
+  }
+  // If we got here, then we couldn't find the proper line in the meminfo file:
+  // do something appropriate like return an error code, throw an exception, etc.
+  fclose(meminfo);
+  return 0;
+#endif
+}
 
 // static
 int64_t SysInfo::AmountOfPhysicalMemory() {

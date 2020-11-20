@@ -1,4 +1,5 @@
 #*#
+logs/
 *.Makefile
 *.a
 *.exe
@@ -64,6 +65,7 @@
 !/third_party/antlr4
 !/third_party/binutils
 !/third_party/inspector_protocol
+!/third_party/json
 !/third_party/jsoncpp
 /third_party/jsoncpp/source
 !/third_party/colorama
