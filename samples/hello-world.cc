@@ -14,12 +14,19 @@
 #include <nlohmann/json.hpp>
 #include "include/libplatform/libplatform.h"
 #include "include/v8.h"
-
+#include <chrono>
 #include <random>
+#include <future>
+#include <thread>
+
 using namespace nlohmann;
 using boost::accumulators::accumulator_set;
 namespace tag = boost::accumulators::tag;
 using boost::accumulators::stats;
+using time_point = std::chrono::steady_clock::time_point;
+using std::chrono::steady_clock;
+using std::chrono::duration_cast;
+using milliseconds = std::chrono::milliseconds;
 double mean(const std::vector<double>& v) {
   accumulator_set<double, stats<tag::variance>> acc;
   for (double d: v) {
@@ -57,11 +64,37 @@ size_t random_heap_size() {
   return exp(dist(rd));
 }
 
-void run(size_t heap_size) {
+struct Input {
+  size_t heap_size;
+  std::string code_path;
+};
+
+// I'd love to use the name from_json and to_json, but unfortunately it seems like the two name is used.
+Input read_from_json(const json& j) {
+  assert(j.count("heap_size") == 1);
+  assert(j.count("code_path") == 1);
+  size_t heap_size = j.value("heap_size", 0);
+  std::string code_path = j.value("code_path", "");
+  return Input {heap_size, code_path};
+}
+
+struct Output {
+  std::string version;
+  size_t time_taken;
+};
+
+void add_to_json(const Output& o, json& j) {
+  j["version"] = o.version;
+  j["time_taken"] = o.time_taken;
+}
+
+Output run(const Input& i, std::mutex* m) {
+  std::cout << "running " << i.code_path << std::endl;
+  Output o;
   // Create a new Isolate and make it the current one.
   v8::Isolate::CreateParams create_params;
   //create_params.constraints.ConfigureDefaults(heap_size, 0);
-  create_params.constraints.ConfigureDefaultsFromHeapSize(heap_size, heap_size);
+  create_params.constraints.ConfigureDefaultsFromHeapSize(i.heap_size, i.heap_size);
   size_t old = create_params.constraints.max_old_generation_size_in_bytes();
   size_t young = create_params.constraints.max_young_generation_size_in_bytes();
   //std::cout << old << " " << young << " " << old + young << std::endl;
@@ -70,30 +103,28 @@ void run(size_t heap_size) {
   v8::Isolate* isolate = v8::Isolate::New(create_params);
   {
     v8::Isolate::Scope isolate_scope(isolate);
-
     // Create a stack-allocated handle scope.
     v8::HandleScope handle_scope(isolate);
-
     // Create a new context.
     v8::Local<v8::Context> context = v8::Context::New(isolate);
-
     // Enter the context for compiling and running the hello world script.
     v8::Context::Scope context_scope(context);
 
     {
       // Create a string containing the JavaScript source code.
-      v8::Local<v8::String> source = fromFile(isolate, "splay.js");
+      v8::Local<v8::String> source = fromFile(isolate, i.code_path);
 
       // Compile the source code.
       v8::Local<v8::Script> script =
           v8::Script::Compile(context, source).ToLocalChecked();
 
+      m->lock();
+      m->unlock(); // abusing mutex as signal - once the mutex is unlocked everyone get access.
+      time_point begin = steady_clock::now();
       v8::Local<v8::Value> result;
-      //for (size_t i = 0; i < 10; ++i) {
-        // Run the script to get the result.
-        result = script->Run(context).ToLocalChecked();
-        //}
-
+      result = script->Run(context).ToLocalChecked();
+      time_point end = steady_clock::now();
+      o.time_taken = duration_cast<milliseconds>(end - begin).count();
       // Convert the result to an UTF8 string and print it.
       v8::String::Utf8Value utf8(isolate, result);
       printf("%s\n", *utf8);
@@ -134,8 +165,76 @@ void run(size_t heap_size) {
   }
   isolate->Dispose();
   delete create_params.array_buffer_allocator;
+  o.version = "2020-11-20";
+  return o;
 }
 
+std::string get_time() {
+  std::time_t t = std::time(nullptr);
+  std::tm* tm = std::localtime(&t);
+  return
+    std::to_string(1900+tm->tm_year) + "-" +
+    std::to_string(1+tm->tm_mon) + "-" +
+    std::to_string(tm->tm_mday) + "-" +
+    std::to_string(tm->tm_hour) + "-" +
+    std::to_string(tm->tm_min) + "-" +
+    std::to_string(tm->tm_sec);
+}
+
+void log_json(const json& j) {
+  std::ofstream f("logs/" + get_time());
+  f << j;
+}
+
+void read_write() {
+  std::mutex m;
+  m.lock();
+
+  std::ifstream t("balancer-config");
+  json j;
+  t >> j;
+
+  Input i = read_from_json(j);
+  std::future<Output> o = std::async(std::launch::async, run, i, &m);
+
+  m.unlock();
+  add_to_json(o.get(), j);
+
+  log_json(j);
+}
+
+struct Controller {
+  
+};
+
+void parallel_experiment() {
+  std::mutex m;
+  m.lock();
+
+  Input splay_input;
+  splay_input.heap_size = 300*1e6;
+  splay_input.code_path = "splay.js";
+
+  Input pdfjs_input;
+  pdfjs_input.heap_size = 700*1e6;
+  pdfjs_input.code_path = "pdfjs.js";
+
+  std::vector<Input> inputs = {splay_input, pdfjs_input};
+
+  std::vector<std::future<Output>> futures;
+  for (const Input& input : inputs) {
+    futures.push_back(std::async(std::launch::async, run, input, &m));
+  }
+
+  m.unlock();
+
+  size_t total_time = 0;
+  for (std::future<Output>& future : futures) {
+    total_time += future.get().time_taken;
+  }
+
+  std::cout << "total_time = " << total_time << std::endl;
+}
 
 int main(int argc, char* argv[]) {
   // Initialize V8.
@@ -145,12 +244,7 @@ int main(int argc, char* argv[]) {
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();
 
-  std::ifstream t("balancer-config");
-  json j;
-  t >> j;
-
-  assert(j.count("heap_size") == 1);
-  run(j.value("heap_size", 0));
+  parallel_experiment();
 
   // Dispose the isolate and tear down V8.
   v8::V8::Dispose();
