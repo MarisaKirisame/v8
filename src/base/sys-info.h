@@ -21,6 +21,9 @@ class V8_BASE_EXPORT SysInfo final {
   // Returns the number of bytes of physical memory on the current machine.
   static int64_t AmountOfPhysicalMemory();
 
+  // Returns the number of bytes of physical memory used on the current machine.
+  static int64_t AmountOfPhysicalMemoryUsed();
+
   // Returns the number of bytes of virtual memory of this process. A return
   // value of zero means that there is no limit on the available virtual memory.
   static int64_t AmountOfVirtualMemory();

@@ -398,14 +398,25 @@ size_t Heap::Available() {
 bool Heap::CanExpandOldGeneration(size_t size) {
   if (force_oom_) return false;
   if (OldGenerationCapacity() + size > max_old_generation_size()) return false;
+  if (OverPhysicalMemory(size)) {
+    return false;
+  }
   // The OldGenerationCapacity does not account compaction spaces used
   // during evacuation. Ensure that expanding the old generation does push
   // the total allocated memory size over the maximum heap size.
   return memory_allocator()->Size() + size <= MaxReserved();
 }
 
+bool Heap::OverPhysicalMemory(size_t size) {
+  std::cout << "physical_memory: " << base::SysInfo::AmountOfPhysicalMemoryUsed() << std::endl;
+  return max_physical_memory_ != 0 && base::SysInfo::AmountOfPhysicalMemoryUsed() + size > max_physical_memory_;
+}
+
 bool Heap::CanExpandOldGenerationBackground(size_t size) {
   if (force_oom_) return false;
+  if (OverPhysicalMemory(size)) {
+    return false;
+  }
   // When the heap is tearing down, then GC requests from background threads
   // are not served and the threads are allowed to expand the heap to avoid OOM.
   return gc_state() == TEAR_DOWN ||

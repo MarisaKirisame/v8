@@ -20,6 +20,7 @@
 #include "src/base/atomic-utils.h"
 #include "src/base/enum-set.h"
 #include "src/base/platform/condition-variable.h"
+#include "src/base/sys-info.h"
 #include "src/builtins/accessors.h"
 #include "src/common/assert-scope.h"
 #include "src/common/globals.h"
@@ -2054,6 +2055,13 @@ class Heap {
 
   // ... and since the last scavenge.
   size_t survived_last_scavenge_ = 0;
+
+  // will not allocate when total amount of physical memory being used is above this number.
+  // if it is 0 this restriction is off.
+public:
+  size_t max_physical_memory_ = 0;
+private:
+  bool OverPhysicalMemory(size_t size);
 
   // This is not the depth of nested AlwaysAllocateScope's but rather a single
   // count, as scopes can be acquired from multiple tasks (read: threads).

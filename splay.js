@@ -398,7 +398,7 @@ SplayTree.Node.prototype.traverse_ = function(f) {
   }
 };
 
-for (var i = 0; i < 100; i++) {
+for (var i = 0; i < 1000; i++) {
   SplaySetup();
   SplayRun();
   SplayTearDown();

@@ -8750,7 +8750,9 @@ class V8_EXPORT Isolate {
    */
   void GetHeapStatistics(HeapStatistics* heap_statistics);
 
-  GCHistory GetGCHistory();
+  void SetMaxPhysicalMemoryOfDevice(size_t max_physical_memory);
+
+ GCHistory GetGCHistory();
   /**
    * Returns the number of spaces in the heap.
    */

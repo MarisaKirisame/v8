@@ -33047,7 +33047,7 @@ var Metadata = PDFJS.Metadata = (function MetadataClosure() {
 
 }).call((typeof PdfJS_window.window === 'undefined') ? this : PdfJS_window.window);
 
-for (var i = 0; i < 10; i++) {
+for (var i = 0; i < 100; i++) {
 setupPdfJS();
 runPdfJS();
 tearDownPdfJS();
