@@ -101,7 +101,7 @@ Output run(const Input& i, std::mutex* m) {
   create_params.array_buffer_allocator =
       v8::ArrayBuffer::Allocator::NewDefaultAllocator();
   v8::Isolate* isolate = v8::Isolate::New(create_params);
-  isolate->SetMaxPhysicalMemoryOfDevice(1e9);
+  isolate->SetMaxPhysicalMemoryOfDevice(0.9e9);
   {
     v8::Isolate::Scope isolate_scope(isolate);
     // Create a stack-allocated handle scope.
@@ -210,7 +210,7 @@ double memory_score(size_t working_memory, size_t max_memory, double garbage_rat
 }
 
 struct RuntimeNode {
-  virtual ~RuntimeNode() {}
+  virtual ~RuntimeNode() = default;
   virtual size_t working_memory() = 0;
   virtual size_t max_memory() = 0;
   virtual double garbage_rate() = 0;
@@ -223,12 +223,21 @@ struct RuntimeNode {
 };
 using Runtime = std::shared_ptr<RuntimeNode>;
 
-struct Controller;
+struct ControllerNode {
+  virtual ~ControllerNode() = default;
+  virtual bool request(RuntimeNode* r, size_t extra) = 0; // todo: use shared_from_this?
+  virtual void optimize() = 0;
+  std::vector<Runtime> runtimes;
+};
+
+using Controller = std::shared_ptr<ControllerNode>;
+
 struct SimulatedRuntimeNode : RuntimeNode {
   size_t working_memory_;
   size_t working_memory() override {
     return working_memory_;
   }
+  size_t current_memory_;
   size_t max_memory_;
   size_t max_memory() override {
     return max_memory_;
@@ -251,38 +260,115 @@ struct SimulatedRuntimeNode : RuntimeNode {
   size_t time_in_gc = 0;
   size_t work_done = 0;
   bool need_gc() {
-    return working_memory_ + garbage_rate_ <= max_memory_;
+    return current_memory_ + garbage_rate_ <= max_memory_;
   }
   void mutator_tick() {
     ++work_done;
-    working_memory_ += garbage_rate_;
+    current_memory_ += garbage_rate_;
   }
   void tick();
-  SimulatedRuntimeNode(size_t working_memory_, size_t garbage_rate_, size_t gc_time_, Controller* c) :
-    working_memory_(working_memory_), garbage_rate_(garbage_rate_), gc_time_(gc_time_), c(c) {
+  SimulatedRuntimeNode(size_t working_memory_, size_t garbage_rate_, size_t gc_time_, Controller c) :
+    working_memory_(working_memory_), current_memory_(working_memory_), garbage_rate_(garbage_rate_), gc_time_(gc_time_), c(c) {
   }
-  Controller* c;
+  Controller c;
 };
 
-struct Controller {
+enum class RuntimeStatus {
+  CanAllocate, Stay, ShouldFree
+};
+
+double median(const std::vector<double>& vec) {
+  assert(vec.size() > 0);
+  return (vec[vec.size() / 2] + vec[(vec.size() + 1) / 2]) / 2;
+}
+// The controller has two stage: the memory rich mode and the memory hungry mode.
+// In the memory rich mode, all memory allocation is permitted, and the Controller does nothing.
+// Only when we used up all memory (the applications is memory constrained) do we need to save memory.
+// Once we enter the memory-hungry mode (by using up all physical memory) we stay there.
+// Maybe we should add some way to get back to memory-rich mode?
+struct BalanceControllerNode : ControllerNode {
   size_t max_memory;
   size_t used_memory;
-  double balance_factor;
-  std::vector<Runtime> runtimes;
-  Controller(size_t max_memory) : max_memory(max_memory), used_memory(0) {
-    
+  double tolerance;
+  RuntimeStatus judge(double current_balance, double runtime_balance) {
+    if (current_balance * (1 + tolerance) < runtime_balance) {
+      return RuntimeStatus::ShouldFree;
+    } else if (runtime_balance * (1 + tolerance) < current_balance) {
+      return RuntimeStatus::CanAllocate;
+    } else {
+      return RuntimeStatus::Stay;
+    }
   }
-  bool request(RuntimeNode* r, size_t extra) {
+  // Score is sorted in ascending order.
+  // We are using median for now.
+  // The other obvious choice is mean, and it may have a problem when data is imbalance:
+  // only too few runtime will be freeing or allocating memory.
+  double aggregate_score(const std::vector<double>& score) {
+    return median(score);
+  }
+  double score() {
+    std::vector<double> score;
+    for (Runtime& runtime: runtimes) {
+      score.push_back(runtime->memory_score());
+    }
+    std::sort(score.begin(), score.end());
+    return aggregate_score(score);
+  }
+  bool memory_rich = true;
+  explicit BalanceControllerNode(size_t max_memory) : max_memory(max_memory), used_memory(0) { }
+  void allow_request(RuntimeNode* r, size_t extra) {
+    used_memory += extra;
+    r->allow_more_memory(extra);
+  }
+  bool process_request(RuntimeNode* r, size_t extra) {
     if (max_memory - used_memory >= extra) {
-      used_memory += extra;
-      r->allow_more_memory(extra);
+      allow_request(r, extra);
       return true;
     } else {
       return false;
     }
   }
+  bool request(RuntimeNode* r, size_t extra) override {
+    if (memory_rich) {
+      if (process_request(r, extra)) {
+        return true;
+      } else {
+        memory_rich = false;
+        return request(r, extra);
+      }
+    } else {
+      double current_score = score();
+      RuntimeStatus status = judge(current_score, r->memory_score());
+      if (status == RuntimeStatus::Stay) {
+        return false;
+      } else if (status == RuntimeStatus::ShouldFree) {
+        used_memory -= r->max_memory();
+        r->shrink_max_memory();
+        used_memory += r->max_memory();
+        return false;
+      } else {
+        assert(status == RuntimeStatus::CanAllocate);
+        if (process_request(r, extra)) {
+          return true;
+        } else {
+          optimize();
+          if (process_request(r, extra)) {
+            return true;
+          } else {
+            return false;
+          }
+        }
+      }
+    }
+  }
   void optimize() {
-    
+    double current_score = score();
+    for (Runtime& runtime: runtimes) {
+      RuntimeStatus status = judge(current_score, runtime->memory_score());
+      if (status == RuntimeStatus::ShouldFree) {
+        runtime->shrink_max_memory();
+      }
+    }
   }
 };
 
@@ -292,7 +378,7 @@ void SimulatedRuntimeNode::tick() {
       if (time_in_gc == gc_time_) {
         in_gc = false;
         time_in_gc = 0;
-        max_memory_ = working_memory_;
+        current_memory_ = working_memory_;
       }
     } else if (need_gc()) {
       c->request(this, garbage_rate_);
@@ -340,18 +426,18 @@ void parallel_experiment() {
 }
 
 void simulated_experiment() {
-  Controller c(100);
+  Controller c = std::make_shared<BalanceControllerNode>(100);
   std::vector<std::shared_ptr<SimulatedRuntimeNode>> runtimes;
-  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(1, 1, 1, &c));
+  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(1, 1, 1, c));
   for (const auto& r: runtimes) {
-    c.runtimes.push_back(r);
+    c->runtimes.push_back(r);
   }
   for (size_t i = 0; i < 10000; ++i) {
     for (const auto&r : runtimes) {
       r->tick();
     }
     if (i % 100 == 0) {
-      c.optimize();
+      c->optimize();
     }
   }
 }
