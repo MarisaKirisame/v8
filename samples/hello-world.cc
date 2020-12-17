@@ -18,6 +18,7 @@
 #include <random>
 #include <future>
 #include <thread>
+#include <set>
 
 using namespace nlohmann;
 using boost::accumulators::accumulator_set;
@@ -209,8 +210,20 @@ double memory_score(size_t working_memory, size_t max_memory, double garbage_rat
   return extra_memory / garbage_rate * extra_memory / gc_time;
 }
 
-struct RuntimeNode {
-  virtual ~RuntimeNode() = default;
+// In order to avoid cycle, Runtime has strong pointer to controller and Controller has weak pointer to runtime.
+struct ControllerNode;
+struct RuntimeNode : std::enable_shared_from_this<RuntimeNode> {
+protected:
+  std::shared_ptr<ControllerNode> controller;
+  bool done_ = false;
+public:
+  void done();
+  bool is_done() {
+    return done_;
+  }
+  virtual ~RuntimeNode() {
+    done();
+  }
   virtual size_t working_memory() = 0;
   virtual size_t max_memory() = 0;
   virtual double garbage_rate() = 0;
@@ -223,13 +236,59 @@ struct RuntimeNode {
 };
 using Runtime = std::shared_ptr<RuntimeNode>;
 
-struct ControllerNode {
+struct ControllerNode : std::enable_shared_from_this<ControllerNode> {
+protected:
+  // this look like weak_ptr, but the content should always be here:
+  // whenever a runtimenode gone out of life it will notify the controller.
+  std::set<std::weak_ptr<RuntimeNode>, std::owner_less<std::weak_ptr<RuntimeNode>>> runtimes_;
+  size_t max_memory_ = 0;
+public:
   virtual ~ControllerNode() = default;
-  virtual bool request(RuntimeNode* r, size_t extra) = 0; // todo: use shared_from_this?
+  virtual bool request(const Runtime& r, size_t extra) = 0; // todo: use shared_from_this?
   virtual void optimize() = 0;
-  std::vector<Runtime> runtimes;
+  // the name of the controller, for debugging and reporting purpose.
+  virtual std::string name() = 0;
+  void add_runtime(const Runtime& r) {
+    assert(runtimes_.count(r) == 0);
+    assert(!r->controller);
+    r->controller = shared_from_this();
+    runtimes_.insert(r);
+    add_runtime_aux(r);
+  }
+  void remove_runtime(const Runtime& r) {
+    assert(runtimes_.count(r) == 1);
+    runtimes_.erase(r);
+    remove_runtime_aux(r);
+  }
+  std::vector<Runtime> runtimes() {
+    std::vector<Runtime> ret;
+    for (const auto& r: runtimes_) {
+      auto sp = r.lock();
+      assert(sp);
+      ret.push_back(sp);
+    }
+    return ret;
+  }
+  void set_max_memory(size_t max_memory_) {
+    this->max_memory_ = max_memory_;
+    set_max_memory_aux(max_memory_);
+  }
+  size_t max_memory() {
+    return max_memory_;
+  }
+  virtual void set_max_memory_aux(size_t max_memory_) { }
+  virtual void add_runtime_aux(const Runtime& r) { }
+  virtual void remove_runtime_aux(const Runtime& r) { }
 };
 
+void RuntimeNode::done() {
+  if (!done_) {
+    done_ = true;
+    if (controller) {
+      controller->remove_runtime(shared_from_this());
+    }
+  }
+}
 using Controller = std::shared_ptr<ControllerNode>;
 
 struct SimulatedRuntimeNode : RuntimeNode {
@@ -247,6 +306,7 @@ struct SimulatedRuntimeNode : RuntimeNode {
     return garbage_rate_;
   }
   size_t gc_time_;
+  size_t work_;
   size_t gc_time() override {
     return gc_time_;
   }
@@ -258,19 +318,21 @@ struct SimulatedRuntimeNode : RuntimeNode {
   }
   bool in_gc = false;
   size_t time_in_gc = 0;
-  size_t work_done = 0;
   bool need_gc() {
     return current_memory_ + garbage_rate_ <= max_memory_;
   }
   void mutator_tick() {
-    ++work_done;
+    --work_;
     current_memory_ += garbage_rate_;
+    if (work_ == 0) {
+      done();
+    }
   }
   void tick();
-  SimulatedRuntimeNode(size_t working_memory_, size_t garbage_rate_, size_t gc_time_, Controller c) :
-    working_memory_(working_memory_), current_memory_(working_memory_), garbage_rate_(garbage_rate_), gc_time_(gc_time_), c(c) {
+  SimulatedRuntimeNode(size_t working_memory_, size_t garbage_rate_, size_t gc_time_, size_t work_) :
+    working_memory_(working_memory_), current_memory_(working_memory_), garbage_rate_(garbage_rate_), work_(work_) {
+    assert(work_ != 0);
   }
-  Controller c;
 };
 
 enum class RuntimeStatus {
@@ -287,9 +349,8 @@ double median(const std::vector<double>& vec) {
 // Once we enter the memory-hungry mode (by using up all physical memory) we stay there.
 // Maybe we should add some way to get back to memory-rich mode?
 struct BalanceControllerNode : ControllerNode {
-  size_t max_memory;
-  size_t used_memory;
-  double tolerance;
+  size_t used_memory = 0;
+  double tolerance = 0.2;
   RuntimeStatus judge(double current_balance, double runtime_balance) {
     if (current_balance * (1 + tolerance) < runtime_balance) {
       return RuntimeStatus::ShouldFree;
@@ -308,27 +369,26 @@ struct BalanceControllerNode : ControllerNode {
   }
   double score() {
     std::vector<double> score;
-    for (Runtime& runtime: runtimes) {
+    for (const Runtime& runtime: runtimes()) {
       score.push_back(runtime->memory_score());
     }
     std::sort(score.begin(), score.end());
     return aggregate_score(score);
   }
   bool memory_rich = true;
-  explicit BalanceControllerNode(size_t max_memory) : max_memory(max_memory), used_memory(0) { }
-  void allow_request(RuntimeNode* r, size_t extra) {
+  void allow_request(const Runtime& r, size_t extra) {
     used_memory += extra;
     r->allow_more_memory(extra);
   }
-  bool process_request(RuntimeNode* r, size_t extra) {
-    if (max_memory - used_memory >= extra) {
+  bool process_request(const Runtime& r, size_t extra) {
+    if (max_memory_ - used_memory >= extra) {
       allow_request(r, extra);
       return true;
     } else {
       return false;
     }
   }
-  bool request(RuntimeNode* r, size_t extra) override {
+  bool request(const Runtime& r, size_t extra) override {
     if (memory_rich) {
       if (process_request(r, extra)) {
         return true;
@@ -361,37 +421,42 @@ struct BalanceControllerNode : ControllerNode {
       }
     }
   }
-  void optimize() {
+  void optimize() override {
     double current_score = score();
-    for (Runtime& runtime: runtimes) {
+    for (const Runtime& runtime: runtimes()) {
       RuntimeStatus status = judge(current_score, runtime->memory_score());
       if (status == RuntimeStatus::ShouldFree) {
         runtime->shrink_max_memory();
       }
     }
   }
+  std::string name() override {
+    return "BalanceController";
+  }
 };
 
 void SimulatedRuntimeNode::tick() {
-    if (in_gc) {
-      ++time_in_gc;
-      if (time_in_gc == gc_time_) {
-        in_gc = false;
-        time_in_gc = 0;
-        current_memory_ = working_memory_;
-      }
-    } else if (need_gc()) {
-      c->request(this, garbage_rate_);
-      if (need_gc()) {
-        in_gc = true;
-        tick();
-      } else {
-        mutator_tick();
-      }
+  assert (!done_);
+  if (in_gc) {
+    ++time_in_gc;
+    if (time_in_gc == gc_time_) {
+      in_gc = false;
+      time_in_gc = 0;
+      current_memory_ = working_memory_;
+    }
+  } else if (need_gc()) {
+    controller->request(shared_from_this(), garbage_rate_);
+    if (need_gc()) {
+      in_gc = true;
+      tick();
     } else {
       mutator_tick();
     }
+  } else {
+    mutator_tick();
+  }
 }
+
 void parallel_experiment() {
   std::mutex m;
   m.lock();
@@ -425,21 +490,52 @@ void parallel_experiment() {
   std::cout << "total_time = " << total_time << std::endl;
 }
 
-void simulated_experiment() {
-  Controller c = std::make_shared<BalanceControllerNode>(100);
+void run_simulated_experiment(const Controller& c) {
+  c->set_max_memory(30);
   std::vector<std::shared_ptr<SimulatedRuntimeNode>> runtimes;
-  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(1, 1, 1, c));
+  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(/*working_memory_=*/5, /*garbage_rate_=*/1, /*gc_time_=*/1, /*work_=*/1));
+  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(/*working_memory_=*/10, /*garbage_rate_=*/1, /*gc_time_=*/1, /*work_=*/1));
   for (const auto& r: runtimes) {
-    c->runtimes.push_back(r);
+    c->add_runtime(r);
   }
-  for (size_t i = 0; i < 10000; ++i) {
+  size_t i = 0;
+  for (bool has_work=true; has_work; ++i) {
+    has_work=false;
     for (const auto&r : runtimes) {
-      r->tick();
+      if (!r->is_done()) {
+        r->tick();
+        has_work=true;
+      }
     }
     if (i % 100 == 0) {
       c->optimize();
     }
   }
+  std::cout << "total time taken: " << i << std::endl;
+}
+
+// Give each runtime a fixed amount of memory.
+// The runtime can either specify that amount itself,
+// and the leftover memory will be splitted evenly between
+// runtime that do not specify.
+// if the specification cannot be reached, specified memory amount will be scaled down proportionally.
+// if all runtime specify memory requirement, memory requirement will be scaled up proportionally.
+// the leftover caused by integer being not divisible will go on a first-come-first serve basis.
+struct FixedControllerNode : ControllerNode {
+  std::string name() override {
+    return "FixedController";
+  }
+  void optimize() override {
+    
+  }
+  bool request(const Runtime& r, size_t extra) override {
+    
+  }
+};
+
+void simulated_experiment() {
+  run_simulated_experiment(std::make_shared<BalanceControllerNode>());
+  run_simulated_experiment(std::make_shared<FixedControllerNode>());
 }
 
 struct RestrictedPlatform : v8::Platform {
@@ -518,7 +614,7 @@ int main(int argc, char* argv[]) {
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();
 
-  parallel_experiment();
+  simulated_experiment();
 
   // Dispose the isolate and tear down V8.
   v8::V8::Dispose();
