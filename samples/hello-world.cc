@@ -206,13 +206,17 @@ void read_write() {
 }
 
 double memory_score(size_t working_memory, size_t max_memory, double garbage_rate, size_t gc_time) {
+  assert(garbage_rate != 0);
+  assert(gc_time != 0);
   size_t extra_memory = max_memory - working_memory;
-  return extra_memory / garbage_rate * extra_memory / gc_time;
+  double ret = extra_memory / garbage_rate * extra_memory / gc_time;
+  return ret;
 }
 
 // In order to avoid cycle, Runtime has strong pointer to controller and Controller has weak pointer to runtime.
 struct ControllerNode;
 struct RuntimeNode : std::enable_shared_from_this<RuntimeNode> {
+  friend ControllerNode;
 protected:
   std::shared_ptr<ControllerNode> controller;
   bool done_ = false;
@@ -297,7 +301,7 @@ struct SimulatedRuntimeNode : RuntimeNode {
     return working_memory_;
   }
   size_t current_memory_;
-  size_t max_memory_;
+  size_t max_memory_ = 0;
   size_t max_memory() override {
     return max_memory_;
   }
@@ -314,12 +318,19 @@ struct SimulatedRuntimeNode : RuntimeNode {
     max_memory_ += extra;
   }
   void shrink_max_memory() override {
-    max_memory_ = working_memory_;
+    // need to do a gc to shrink memory.
+    max_memory_ = std::min(working_memory_, max_memory_);
   }
   bool in_gc = false;
   size_t time_in_gc = 0;
   bool need_gc() {
-    return current_memory_ + garbage_rate_ <= max_memory_;
+    return current_memory_ + garbage_rate_ > max_memory_;
+  }
+  size_t needed_memory() {
+    if (need_gc()) {
+      return current_memory_ + garbage_rate_ - max_memory_;
+    }
+    return 0;
   }
   void mutator_tick() {
     --work_;
@@ -330,7 +341,7 @@ struct SimulatedRuntimeNode : RuntimeNode {
   }
   void tick();
   SimulatedRuntimeNode(size_t working_memory_, size_t garbage_rate_, size_t gc_time_, size_t work_) :
-    working_memory_(working_memory_), current_memory_(working_memory_), garbage_rate_(garbage_rate_), work_(work_) {
+    working_memory_(working_memory_), current_memory_(working_memory_), garbage_rate_(garbage_rate_), gc_time_(gc_time_), work_(work_) {
     assert(work_ != 0);
   }
 };
@@ -352,6 +363,7 @@ struct BalanceControllerNode : ControllerNode {
   size_t used_memory = 0;
   double tolerance = 0.2;
   RuntimeStatus judge(double current_balance, double runtime_balance) {
+    std::cout << "current_balance: " << current_balance << " runtime_balance: " << runtime_balance << std::endl;
     if (current_balance * (1 + tolerance) < runtime_balance) {
       return RuntimeStatus::ShouldFree;
     } else if (runtime_balance * (1 + tolerance) < current_balance) {
@@ -373,6 +385,9 @@ struct BalanceControllerNode : ControllerNode {
       score.push_back(runtime->memory_score());
     }
     std::sort(score.begin(), score.end());
+    if (score.empty()) {
+      return 0; // score doesnt matter without runtime anymore.
+    }
     return aggregate_score(score);
   }
   bool memory_rich = true;
@@ -422,10 +437,12 @@ struct BalanceControllerNode : ControllerNode {
     }
   }
   void optimize() override {
+    std::cout << "optimizing" << std::endl;
     double current_score = score();
     for (const Runtime& runtime: runtimes()) {
       RuntimeStatus status = judge(current_score, runtime->memory_score());
       if (status == RuntimeStatus::ShouldFree) {
+        std::cout << "memory shrinked" << std::endl;
         runtime->shrink_max_memory();
       }
     }
@@ -438,19 +455,20 @@ struct BalanceControllerNode : ControllerNode {
 void SimulatedRuntimeNode::tick() {
   assert (!done_);
   if (in_gc) {
+    std::cout << "doing gc" << std::endl;
     ++time_in_gc;
     if (time_in_gc == gc_time_) {
       in_gc = false;
-      time_in_gc = 0;
       current_memory_ = working_memory_;
     }
   } else if (need_gc()) {
-    controller->request(shared_from_this(), garbage_rate_);
-    if (need_gc()) {
-      in_gc = true;
-      tick();
-    } else {
+    if (controller->request(shared_from_this(), needed_memory())) {
+      assert (! need_gc());
       mutator_tick();
+    } else {
+      in_gc = true;
+      time_in_gc = 0;
+      tick();
     }
   } else {
     mutator_tick();
@@ -491,10 +509,10 @@ void parallel_experiment() {
 }
 
 void run_simulated_experiment(const Controller& c) {
-  c->set_max_memory(30);
+  c->set_max_memory(40);
   std::vector<std::shared_ptr<SimulatedRuntimeNode>> runtimes;
-  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(/*working_memory_=*/5, /*garbage_rate_=*/1, /*gc_time_=*/1, /*work_=*/1));
-  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(/*working_memory_=*/10, /*garbage_rate_=*/1, /*gc_time_=*/1, /*work_=*/1));
+  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(/*working_memory_=*/5, /*garbage_rate_=*/1, /*gc_time_=*/2, /*work_=*/20));
+  runtimes.push_back(std::make_shared<SimulatedRuntimeNode>(/*working_memory_=*/10, /*garbage_rate_=*/1, /*gc_time_=*/2, /*work_=*/20));
   for (const auto& r: runtimes) {
     c->add_runtime(r);
   }
@@ -507,9 +525,7 @@ void run_simulated_experiment(const Controller& c) {
         has_work=true;
       }
     }
-    if (i % 100 == 0) {
-      c->optimize();
-    }
+    sleep(1);
   }
   std::cout << "total time taken: " << i << std::endl;
 }
@@ -535,7 +551,7 @@ struct FixedControllerNode : ControllerNode {
 
 void simulated_experiment() {
   run_simulated_experiment(std::make_shared<BalanceControllerNode>());
-  run_simulated_experiment(std::make_shared<FixedControllerNode>());
+  //run_simulated_experiment(std::make_shared<FixedControllerNode>());
 }
 
 struct RestrictedPlatform : v8::Platform {
