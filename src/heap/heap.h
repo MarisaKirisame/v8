@@ -255,6 +255,10 @@ using EphemeronRememberedSet =
 
 using CollectionEpoch = uint32_t;
 
+struct Timer {
+
+};
+
 class Heap {
  public:
   std::string guid() const {
