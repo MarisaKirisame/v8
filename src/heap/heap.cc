@@ -219,7 +219,12 @@ Heap::Heap()
   RememberUnmappedPage(kNullAddress, false);
 }
 
-Heap::~Heap() = default;
+Heap::~Heap() {
+  std::ofstream f(guid() + ".log");
+  nlohmann::json j;
+  to_json(j, gc_history_);
+  f << j;
+}
 
 size_t Heap::MaxReserved() {
   const size_t kMaxNewLargeObjectSpaceSize = max_semi_space_size_;

@@ -5,6 +5,8 @@
 #ifndef V8_HEAP_HEAP_H_
 #define V8_HEAP_HEAP_H_
 
+#include <sys/types.h>
+#include <unistd.h>
 #include <atomic>
 #include <cmath>
 #include <map>
@@ -12,6 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <fstream>
 
 // Clients of this interface shouldn't depend on lots of heap internals.
 // Do not include anything from src/heap here!
@@ -254,6 +257,9 @@ using CollectionEpoch = uint32_t;
 
 class Heap {
  public:
+  std::string guid() const {
+    return std::to_string(getpid()) + "_" + std::to_string(reinterpret_cast<intptr_t>(this));
+  }
   // Stores ephemeron entries where the EphemeronHashTable is in old-space,
   // and the key of the entry is in new-space. Such keys do not appear in the
   // usual OLD_TO_NEW remembered set.

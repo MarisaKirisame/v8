@@ -15,6 +15,7 @@
 #ifndef INCLUDE_V8_H_
 #define INCLUDE_V8_H_
 
+#include <nlohmann/json.hpp>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8333,10 +8334,14 @@ struct GCRecord {
   bool is_major_gc;
 };
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GCRecord, before_memory, after_memory, before_time, after_time, is_major_gc)
+
 struct GCHistory {
   std::vector<GCRecord> records;
   clock_t heap_birth_time = clock();
 };
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GCHistory, records, heap_birth_time)
 
 /**
  * Isolate represents an isolated instance of the V8 engine.  V8 isolates have

@@ -410,6 +410,7 @@ config("internal_config_base") {
     ".",
     "include",
     "$target_gen_dir",
+    "third_party/json/include/",
   ]
 }
 
@@ -492,6 +493,7 @@ config("external_config") {
   include_dirs = [
     "include",
     "$target_gen_dir/include",
+    "third_party/json/include/",
   ]
 }
 
