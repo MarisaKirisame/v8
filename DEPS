@@ -91,8 +91,6 @@ deps = {
     Var('chromium_url') + '/chromium/src/build.git' + '@' + '2d94fa57d93472a3fad4f1f9e6a71e170fba4b71',
   'third_party/depot_tools':
     Var('chromium_url') + '/chromium/tools/depot_tools.git' + '@' + '67e12286df04ef0eeec3aeaf6f224d2fe11751b7',
-  'third_party/json':
-    'https://github.com/nlohmann/json.git' + '@' + '176d8e261a00dc27bfbf334e12d50572bf43fc4c',
   'third_party/icu':
     Var('chromium_url') + '/chromium/deps/icu.git' + '@' + '899e18383fd732b47e6978db2b960a1b2a80179b',
   'third_party/instrumented_libraries':
