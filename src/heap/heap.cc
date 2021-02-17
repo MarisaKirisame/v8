@@ -1530,6 +1530,7 @@ Heap::DevToolsTraceEventScope::~DevToolsTraceEventScope() {
 bool Heap::CollectGarbage(AllocationSpace space,
                           GarbageCollectionReason gc_reason,
                           const v8::GCCallbackFlags gc_callback_flags) {
+  std::lock_guard<std::mutex> guard(gc_mutex);
   // todo: make Heap() reentrant by stacking mutex on top?
   // sounds verymuch like a hack
   const char* collector_reason = nullptr;

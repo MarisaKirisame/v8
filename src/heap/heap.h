@@ -255,12 +255,27 @@ using EphemeronRememberedSet =
 
 using CollectionEpoch = uint32_t;
 
+// A timer that call a function periodically.
+// One thing I can do is to have timer as a member of the object of interest,
+// And start/stop the timer automatically with RAII tricks, in the timer class.
+// This sounds too dangerous - the function might run when it is invalid.
+// Also, when the object timer call is being destructed, timer might call on invalid state again.
+// This API is also more flexible.
 struct Timer {
-
+  using time_t = std::chrono::time_point<std::chrono::system_clock>;
+  bool started = false;
+  std::function<void()> f;
+  void start(const std::function<void()>);
+  void stop();
+  time_t last_signal;
+  time_t::duration interval;
 };
 
 class Heap {
  public:
+  // I have no idea how Heap deal with concurrency.
+  std::mutex m;
+  Timer t;
   std::string guid() const {
     return std::to_string(getpid()) + "_" + std::to_string(reinterpret_cast<intptr_t>(this));
   }
