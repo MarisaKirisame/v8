@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "json.h"
 #include "src/api/api-inl.h"
 #include "src/base/bits.h"
 #include "src/base/flags.h"
