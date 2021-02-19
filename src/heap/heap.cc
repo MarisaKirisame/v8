@@ -1571,12 +1571,14 @@ bool Heap::CollectGarbage(AllocationSpace space,
                           const v8::GCCallbackFlags gc_callback_flags) {
   std::lock_guard<std::recursive_mutex> timer_guard(timer.mutex);
   std::lock_guard<std::mutex> gc_guard(gc_mutex);
+  std::cout << "GC start" << std::endl;
   // WARNING: do not swap the above two line. timer must be locked before gc.
-  //timer.try_start(
-  //[=]() {
-
-  //},
-  //std::chrono::milliseconds(10));
+  timer.try_start(
+    [=]() {
+      CollectGarbage(OLD_SPACE,
+                     GarbageCollectionReason::kExternalMemoryPressure);
+    },
+    std::chrono::milliseconds(10));
   const char* collector_reason = nullptr;
   bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
   size_t before_memory = GlobalSizeOfObjects();
@@ -1585,6 +1587,7 @@ bool Heap::CollectGarbage(AllocationSpace space,
   auto after_time = clock();
   size_t after_memory = GlobalSizeOfObjects();
   gc_history_.records.push_back({before_memory, after_memory, before_time, after_time, major});
+  std::cout << "GC end" << std::endl;
   return result;
 }
 
