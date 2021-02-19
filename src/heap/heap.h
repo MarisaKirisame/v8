@@ -266,10 +266,11 @@ class Timer {
 public:
   using time_t = std::chrono::time_point<std::chrono::system_clock>;
 private:
-  bool started_ = false;
-  time_t last_signal;
+  std::atomic<bool> started_;
   std::thread t;
 public:
+  Timer() : started_(false) {
+  }
   std::recursive_mutex mutex;
   // a timer to make sure after stop() return, f() will not be running.
   // WARNING: there is two mutex in the system: the timer_mutex and the gc_mutex.

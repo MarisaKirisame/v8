@@ -1530,7 +1530,6 @@ Heap::DevToolsTraceEventScope::~DevToolsTraceEventScope() {
 }
 
 bool Timer::started() {
-  std::lock_guard<std::recursive_mutex> timer_guard(mutex);
   return started_;
 }
 
@@ -1573,9 +1572,11 @@ bool Heap::CollectGarbage(AllocationSpace space,
   std::lock_guard<std::recursive_mutex> timer_guard(timer.mutex);
   std::lock_guard<std::mutex> gc_guard(gc_mutex);
   // WARNING: do not swap the above two line. timer must be locked before gc.
-  if (!timer.started()) {
-    timer.start([](){}, std::chrono::milliseconds(10));
-  }
+  //timer.try_start(
+  //[=]() {
+
+  //},
+  //std::chrono::milliseconds(10));
   const char* collector_reason = nullptr;
   bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
   size_t before_memory = GlobalSizeOfObjects();
