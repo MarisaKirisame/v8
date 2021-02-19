@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 #include <fstream>
+#include <thread>
 
 // Clients of this interface shouldn't depend on lots of heap internals.
 // Do not include anything from src/heap here!
@@ -261,14 +262,27 @@ using CollectionEpoch = uint32_t;
 // This sounds too dangerous - the function might run when it is invalid.
 // Also, when the object timer call is being destructed, timer might call on invalid state again.
 // This API is also more flexible.
-struct Timer {
+class Timer {
+public:
   using time_t = std::chrono::time_point<std::chrono::system_clock>;
-  bool started = false;
-  std::function<void()> f;
-  void start(const std::function<void()>);
-  void stop();
+private:
+  bool started_ = false;
   time_t last_signal;
-  time_t::duration interval;
+  std::thread t;
+public:
+  std::recursive_mutex mutex;
+  // a timer to make sure after stop() return, f() will not be running.
+  // WARNING: there is two mutex in the system: the timer_mutex and the gc_mutex.
+  // we force the timer mutex to be of a high priority - other mutex-locked code *cannot* lock timer by calling timer's method.
+  // this design decision allow timer's f to call arbitary code.
+  // this mean, inside heap's collectgarbage, we must acquire the lock manually, before locking gc_mutex.
+  // todo: right now, mutex is locked automatically on api call.
+  // maybe expose a transactional-based api that require passing the lock_guard?
+  bool started();
+  void start(const std::function<void()>& f, time_t::duration interval);
+  void try_start(const std::function<void()>& f, time_t::duration interval);
+  void stop();
+  void try_stop();
 };
 
 class Heap {
@@ -276,7 +290,7 @@ class Heap {
   // I have no idea how Heap deal with concurrency, so for safety I am slapping a mutex on top of all garbage collection,
   // as I am entering concurrent world.
   std::mutex gc_mutex;
-  Timer t;
+  Timer timer;
   std::string guid() const {
     return std::to_string(getpid()) + "_" + std::to_string(reinterpret_cast<intptr_t>(this));
   }

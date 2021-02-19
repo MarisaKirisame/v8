@@ -221,7 +221,8 @@ Heap::Heap()
 }
 
 Heap::~Heap() {
-  std::ofstream f(guid() + ".log");
+  timer.try_stop();
+  std::ofstream f(guid() + ".gc.log");
   nlohmann::json j;
   to_json(j, gc_history_);
   f << j;
@@ -1528,12 +1529,53 @@ Heap::DevToolsTraceEventScope::~DevToolsTraceEventScope() {
                    heap_->SizeOfObjects());
 }
 
+bool Timer::started() {
+  std::lock_guard<std::recursive_mutex> timer_guard(mutex);
+  return started_;
+}
+
+void Timer::start(const std::function<void()>& f, time_t::duration interval) {
+  std::lock_guard<std::recursive_mutex> timer_guard(mutex);
+  assert(!started());
+  started_ = true;
+  t = std::thread([=](){
+                    while(this->started_) {
+                      time_t time = std::chrono::system_clock::now();
+                      f();
+                      std::this_thread::sleep_until(time + interval);
+                    }
+                  });
+}
+
+void Timer::try_start(const std::function<void()>& f, time_t::duration interval) {
+  if (!started()) {
+    start(f, interval);
+  }
+}
+
+void Timer::stop() {
+  std::lock_guard<std::recursive_mutex> timer_guard(mutex);
+  assert(started());
+  started_ = false;
+  t.join();
+}
+
+void Timer::try_stop() {
+  std::lock_guard<std::recursive_mutex> timer_guard(mutex);
+  if (started()) {
+    stop();
+  }
+}
+
 bool Heap::CollectGarbage(AllocationSpace space,
                           GarbageCollectionReason gc_reason,
                           const v8::GCCallbackFlags gc_callback_flags) {
-  std::lock_guard<std::mutex> guard(gc_mutex);
-  // todo: make Heap() reentrant by stacking mutex on top?
-  // sounds verymuch like a hack
+  std::lock_guard<std::recursive_mutex> timer_guard(timer.mutex);
+  std::lock_guard<std::mutex> gc_guard(gc_mutex);
+  // WARNING: do not swap the above two line. timer must be locked before gc.
+  if (!timer.started()) {
+    timer.start([](){}, std::chrono::milliseconds(10));
+  }
   const char* collector_reason = nullptr;
   bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
   size_t before_memory = GlobalSizeOfObjects();
