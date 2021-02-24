@@ -1575,15 +1575,11 @@ bool Heap::CollectGarbage(AllocationSpace space,
   std::lock_guard<std::recursive_mutex> gc_guard(gc_mutex);
   std::cout << "collecting garbage..." << std::endl;
   // WARNING: do not swap the above two line. timer must be locked before gc.
-  /*timer.try_start(
+  timer.try_start(
     [=]() {
-      std::cout << "try timer gc" << std::endl;
-      CollectGarbage(OLD_SPACE,
-                     GarbageCollectionReason::kExternalMemoryPressure);
-      std::cout << "timer gc ok" << std::endl;
+      collection_barrier_->AwaitCollectionBackground();
     },
-    std::chrono::milliseconds(100));
-  */
+    std::chrono::milliseconds(10));
   const char* collector_reason = nullptr;
   bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
   size_t before_memory = GlobalSizeOfObjects();
