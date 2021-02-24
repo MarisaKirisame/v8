@@ -290,7 +290,7 @@ class Heap {
  public:
   // I have no idea how Heap deal with concurrency, so for safety I am slapping a mutex on top of all garbage collection,
   // as I am entering concurrent world.
-  std::mutex gc_mutex;
+  std::recursive_mutex gc_mutex;
   Timer timer;
   std::string guid() const {
     return std::to_string(getpid()) + "_" + std::to_string(reinterpret_cast<intptr_t>(this));
