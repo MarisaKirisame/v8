@@ -1579,7 +1579,7 @@ bool Heap::CollectGarbage(AllocationSpace space,
     [=]() {
       collection_barrier_->AwaitCollectionBackground();
     },
-    std::chrono::milliseconds(10));
+    std::chrono::milliseconds(1000));
   const char* collector_reason = nullptr;
   bool major = !IsYoungGenerationCollector(SelectGarbageCollector(space, &collector_reason));
   size_t before_memory = GlobalSizeOfObjects();
