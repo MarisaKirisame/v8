@@ -201,8 +201,9 @@ class ScavengeTaskObserver : public AllocationObserver {
   Heap* heap_;
 };
 
-Heap::Heap()
-    : isolate_(isolate()),
+Heap::Heap() :
+      f(guid() + ".gc.log"),
+      isolate_(isolate()),
       memory_pressure_level_(MemoryPressureLevel::kNone),
       global_pretenuring_feedback_(kInitialFeedbackCapacity),
       safepoint_(new GlobalSafepoint(this)),
@@ -222,10 +223,7 @@ Heap::Heap()
 
 Heap::~Heap() {
   timer.try_stop();
-  std::ofstream f(guid() + ".gc.log");
-  nlohmann::json j;
-  to_json(j, gc_history_);
-  f << j;
+  std::cout << "Heap destructor called" << std::endl;
 }
 
 size_t Heap::MaxReserved() {
@@ -1317,7 +1315,6 @@ TimedHistogram* Heap::GCTypeTimer(GarbageCollector collector) {
 
 void Heap::CollectAllGarbage(int flags, GarbageCollectionReason gc_reason,
                              const v8::GCCallbackFlags gc_callback_flags) {
-  std::lock_guard<std::recursive_mutex> gc_guard(gc_mutex);
   // Since we are ignoring the return value, the exact choice of space does
   // not matter, so long as we do not specify NEW_SPACE, which would not
   // cause a full GC.
@@ -1398,7 +1395,6 @@ void Heap::CollectAllAvailableGarbage(GarbageCollectionReason gc_reason) {
   // Note: as weak callbacks can execute arbitrary code, we cannot
   // hope that eventually there will be no weak callbacks invocations.
   // Therefore stop recollecting after several attempts.
-  std::lock_guard<std::recursive_mutex> gc_guard(gc_mutex);
   if (gc_reason == GarbageCollectionReason::kLastResort) {
     InvokeNearHeapLimitCallback();
   }
@@ -1572,9 +1568,7 @@ bool Heap::CollectGarbage(AllocationSpace space,
                           GarbageCollectionReason gc_reason,
                           const v8::GCCallbackFlags gc_callback_flags) {
   std::lock_guard<std::recursive_mutex> timer_guard(timer.mutex);
-  std::lock_guard<std::recursive_mutex> gc_guard(gc_mutex);
-  std::cout << "collecting garbage..." << std::endl;
-  // WARNING: do not swap the above two line. timer must be locked before gc.
+  // todo: there seems to be deadlock because collection barrier isnt recursive_mutex. consider swapping if deadlock come up too often.
   timer.try_start(
     [=]() {
       collection_barrier_->AwaitCollectionBackground();
@@ -1587,7 +1581,11 @@ bool Heap::CollectGarbage(AllocationSpace space,
   bool result = CollectGarbageAux(space, gc_reason, gc_callback_flags);
   auto after_time = clock();
   size_t after_memory = GlobalSizeOfObjects();
-  gc_history_.records.push_back({before_memory, after_memory, before_time, after_time, major});
+  GCRecord rec = {before_memory, after_memory, before_time, after_time, major};
+  gc_history_.records.push_back(rec);
+  nlohmann::json j;
+  to_json(j, rec);
+  f << j;
   return result;
 }
 
