@@ -1585,7 +1585,7 @@ bool Heap::CollectGarbage(AllocationSpace space,
   gc_history_.records.push_back(rec);
   nlohmann::json j;
   to_json(j, rec);
-  f << j;
+  f << j << std::endl;
   return result;
 }
 
